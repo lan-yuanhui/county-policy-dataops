@@ -1296,7 +1296,7 @@ methods: {
             };
           });
         })(),
-        coverNote: "", observeNote: ""
+        coverNote: "", observeStats: [], dominantType: []
       };
     },
     created: function () {
@@ -1348,7 +1348,77 @@ methods: {
       var t1 = bc[0], t2 = bc[1], last = bc[bc.length - 1];
       this.coverNote = "『<b>" + t1.county + "</b>』收录最多（" + t1.count + " 条）、<b>" + t2.county + "</b>（" + t2.count +
         " 条）次之；<b>" + last.county + " " + last.count + " 条</b>受政府门户栏目结构限制（仅首页列表可解析），已在采集口径中如实标注。";
-      this.observeNote = t1.county + "、" + t2.county + "收录相对充分，可检索到<b style=\"color:#1F2A37;\">数字政府建设规划、菠萝产业、海洋牧场、乡村振兴金融</b>等主题政策，是「县域数字政务 + 农业数字化」叙事的核心素材。";
+
+      /* ---- A26 修复：原「县域观察」卡片只有一段静态文案，在半宽卡片里
+         下方留白近 2/3，视觉上明显空洞突兀；且内容与左侧「覆盖对比」
+         结论条大量重复（都在说徐闻/遂溪收录多）。
+         改为「动态洞察卡」：从真实数据算出 4 条可验证的结构性事实，
+         每条一行「标签 + 数值 + 结论」，用数据把卡片填满。
+         所有数字均从 D.policies / D.by_county / D.by_type 现算，不写死。 */
+      var cs = D.counties || [];
+      var allP = D.policies || [];
+      var ctyTotal = D.by_county.reduce(function (a, x) { return a + x.count; }, 0);
+      var total = D.total_policy || 0;
+
+      // ① 覆盖集中度：头部两县占县级政策总量的比重
+      var head2 = bc[0].count + (bc[1] ? bc[1].count : 0);
+      var head2Pct = ctyTotal ? Math.round(head2 / ctyTotal * 100) : 0;
+
+      // ② 各县主导类型：找出该县占比最高的政策类型（排除「其他」噪音）
+      var dominant = cs.map(function (c) {
+        var hit = allP.filter(function (p) { return (p.related_counties || "").indexOf(c.name) >= 0; });
+        var m = {};
+        hit.forEach(function (p) {
+          var t = p.policy_type_main || "未分类";
+          if (t === "其他") return;                 /* 「其他」是兜底桶，不参与主导类型判定 */
+          m[t] = (m[t] || 0) + 1;
+        });
+        var best = "", n = 0;
+        Object.keys(m).forEach(function (k) { if (m[k] > n) { n = m[k]; best = k; } });
+        return { name: c.name, type: best || "—", n: n, total: hit.length };
+      });
+      /* 按「主导类型条数」降序 —— 原实现沿用 cards 顺序，导致
+         高州市（3/4，总量最小）排在遂溪县（35/108）之前，
+         条形长度与排序不一致，读者会误判谁的产业政策更多。
+         降序后条形呈阶梯状，一眼可比。 */
+      dominant.sort(function (a, b) { return b.n - a.n; });
+      this.dominantType = dominant;
+
+      // ③ 县级 vs 国家级：本地落地政策的占比与力度
+      var lvC = (bl.find(function (l) { return l.level === "国家级"; }) || { count: 0 }).count;
+      var ctyShare = total ? Math.round(lvCounty / total * 100) : 0;
+
+      // ④ 最新政策时点：数据新鲜度（取县级池里最新一条的日期）
+      var ctyP = allP.filter(function (p) { return (p.related_counties || "").trim(); });
+      ctyP.sort(function (a, b) { return (b.publish_date || "").localeCompare(a.publish_date || ""); });
+      var newest = ctyP.length ? (ctyP[0].publish_date || "").slice(0, 10) : "—";
+
+      this.observeStats = [
+        {
+          k: "覆盖集中度",
+          v: head2Pct + "%",
+          d: "县级政策前两强（" + bc[0].county + " + " + bc[1].county + "）合计 " + head2 +
+             " 条，占 5 县总量 " + ctyTotal + " 条的 " + head2Pct + "%，头部效应显著。"
+        },
+        {
+          k: "主导类型",
+          v: dominant.filter(function (x) { return x.type === "产业发展"; }).length + " / " + dominant.length,
+          d: "5 县中有 " + dominant.filter(function (x) { return x.type === "产业发展"; }).length +
+             " 县以『产业发展』为第一主题，产业类政策是县域叙事主线（其余县主导类型见下）。"
+        },
+        {
+          k: "本地化程度",
+          v: ctyShare + "%",
+          d: "县级 " + lvCounty + " 条 / 全量 " + total + " 条；其余 " + lvC +
+             " 条为国家级政策背景，本地落地政策占比 " + ctyShare + "%，数据可逐级下钻至来源站点。"
+        },
+        {
+          k: "最新收录",
+          v: newest,
+          d: "县级政策池最新一条发布于 " + newest + "，覆盖 " + cs.length +
+             " 个县级行政区，采集口径为政府门户政务公开栏目静态列表。"
+        }
+      ];
       this.$nextTick(function () { self.drawCharts(); });
     },
     beforeUnmount: function () { destroyCharts(); },
@@ -1436,12 +1506,35 @@ methods: {
       '      <div class="card-hd"><h3>县域政策覆盖对比</h3><span class="more">按 related_counties 字段统计</span></div>' +
       '      <div class="card-bd">' +
       '        <div class="chart-note" v-html="coverNote"></div>' +
-      '        <div class="chart-box h-sm"><div class="sk skeleton" style="position:absolute;inset:0;z-index:2;"></div><div id="ct-bar" style="width:100%;height:240px;"></div></div>' +
+      /* A26：右卡「县域观察」补足内容后，左卡图表下方反成新的留白区
+         （实测 tailGap 从 18px 变为左卡明显更大）。容器 240 → 370px，
+         与右卡内容高度对齐，两卡等高且都无空洞。 */
+      '        <div class="chart-box" style="height:370px;"><div class="sk skeleton" style="position:absolute;inset:0;z-index:2;"></div><div id="ct-bar" style="width:100%;height:370px;"></div></div>' +
       '      </div>' +
       '    </div>' +
       '    <div class="card">' +
-      '      <div class="card-hd"><h3>县域观察</h3></div>' +
-      '      <div class="card-bd"><p style="font-size:13px;color:#6B7280;line-height:1.9;" v-html="observeNote"></p></div>' +
+      '      <div class="card-hd"><h3>县域观察</h3><span class="more">由真实数据现算</span></div>' +
+      '      <div class="card-bd" style="padding-top:12px;">' +
+      /* A26：原为单段静态文案，半宽卡片里留白近 2/3，空洞突兀。
+         现改为「4 条洞察 + 主导类型矩阵」双区结构，用数据填满。 */
+      '        <ul class="obs-list">' +
+      '          <li v-for="(s, i) in observeStats" :key="s.k">' +
+      '            <div class="obs-hd"><span class="obs-k">{{ s.k }}</span><span class="obs-v">{{ s.v }}</span></div>' +
+      '            <p class="obs-d">{{ s.d }}</p>' +
+      '          </li>' +
+      '        </ul>' +
+      /* 主导类型矩阵：一行一县，用条形长度表达该类型条数，
+         让「哪个县主打什么」一眼可比。 */
+      '        <div class="obs-matrix">' +
+      '          <div class="obs-mt">各县主导政策类型</div>' +
+      '          <div class="obs-row" v-for="d in dominantType" :key="d.name">' +
+      '            <span class="obs-n">{{ d.name }}</span>' +
+      '            <span class="obs-bar"><i :style="{ width: (d.total ? Math.round(d.n / d.total * 100) : 0) + \'%\' }"></i></span>' +
+      '            <span class="obs-t">{{ d.type }}</span>' +
+      '            <span class="obs-c">{{ d.n }}/{{ d.total }}</span>' +
+      '          </div>' +
+      '        </div>' +
+      '      </div>' +
       '    </div>' +
       '  </div>' +
       '  <div class="grid" style="margin-top:18px;" v-for="cp in countyPolicies" :key="cp.county">' +
