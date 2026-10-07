@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://19830709753.github.io/county-policy-dataops/sitemap.xml
