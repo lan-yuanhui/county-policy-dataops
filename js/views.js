@@ -1,5 +1,6 @@
 /* ==========================================================================
    views.js — 县域政策数据运营平台 视图组件 v2.1
+   （版本口径：全站统一为 v2.1，与侧栏页脚保持一致；数据字典独立版本号见「数据口径」页）
    图表引擎升级：Apache ECharts 5（本地化，结论导向设计——每图配一句结论）
    注册 window.Views（Overview / PolicyView / CountyView / ProjectView / AboutView）
    ========================================================================== */
@@ -61,6 +62,157 @@
     ]);
   }
 
+  /* ---------- 中文长名称「语义断行」（A11 修复） ----------
+     背景：图表 Y 轴标签若按「每 N 字硬切」，会出现两类问题——
+       ① 末行只剩一两个字（「广东省政务服务和数据管理局」按 6 字切成
+          「广东省政务服」「务和数据管理」「局」，最后一行只有「局」）；
+       ② 折出来的行数超过绘图区预留高度，溢出覆盖到相邻条目。
+     策略：
+       ① 先做「词元切分」——把名称拆成完整语义词组序列，例如
+          「广东省／政务服务／和／数据／管理局」；
+       ② 在所有「词组边界」中挑最接近中点的位置作为断点，
+          保证断点两侧都是完整词组（绝不切在词内）；
+       ③ 若某一行仍超长，对该行递归再切一次（最多三行兜底）。
+     效果：smartWrap("广东省政务服务和数据管理局", 8)
+           → "广东省政务服务和\n数据管理局" */
+  function smartWrap(name, maxPerLine) {
+    name = String(name == null ? "" : name);
+    var max = maxPerLine || 8;
+    if (name.length <= max) return name;
+
+    /* 行政区划前缀（省 / 市 / 县 / 区 / 自治州 …），按长度降序 */
+    var PREFIX = ["维吾尔自治区", "回族自治区", "壮族自治区", "特别行政区",
+                  "自治州", "自治县", "自治区", "省", "市", "县", "区"];
+    /* 机构后缀词（构成名称尾部的核心词组），按长度降序。
+       列表覆盖真实数据中出现的全部机构类型，以及常见政府机构名。
+       注意：「人力资源和社会保障厅」「农牧厅」等必须完整列出，
+       否则会被切成「…人力资源和｜社会保障厅」（行尾悬空连接词）或
+       「内蒙古自治区农牧｜厅」（孤字行）。 */
+    var SUFFIX = ["政务服务和数据管理局", "政务服务数据管理局", "人民政府门户网站",
+                  "政府门户网站", "人力资源和社会保障厅", "人力资源和社会保障局",
+                  "发展和改革委员会", "工业和信息化厅", "农业农村厅", "农业农村部",
+                  "政务服务和数据管理", "人民政府门户", "医疗保障局", "生态环境厅",
+                  "市场监督管理局", "自然资源厅", "住房和城乡建设厅", "交通运输厅",
+                  "水利厅", "教育厅", "科技厅", "财政厅", "公安厅", "司法厅",
+                  "农牧厅", "林业厅", "商务厅", "文化和旅游厅", "卫生健康委员会",
+                  "管理局", "管理厅", "管理部", "门户网站", "人民政府", "政府门户",
+                  "委员会", "办公室", "指挥部", "工作组", "研究院", "事务所",
+                  "发改委", "农牧厅", "政府", "门户", "网站", "厅", "部", "局",
+                  "委", "院", "署", "办", "站", "所", "会"];
+    /* 连接/结构词：可独立成行，但绝不宜放在行首，也尽量不放行尾 */
+    var CONJ = "和与及的地得之并或";
+    /* 行尾不宜出现的字（前置修饰字，如「省」+「政务服务」不可拆） */
+    var NOT_TAIL = "省市区县镇乡村";
+
+    /* —— 步骤 1：生成断点候选集（每个候选 = 第二行的起始下标） —— */
+    var cuts = [];
+    /* 1a. 行政区划前缀之后：「广东省」|「政务服务和数据管理局」
+           注意：这里只判断「名称以某个行政区划词开头」，并且把该词整体
+           视为第一行。原实现用了 name.indexOf(p) 的错位比较，导致
+           「广东省…」永远匹配不上、前缀断点从未生成 —— 已修正。 */
+    for (var i = 0; i < PREFIX.length; i++) {
+      var p = PREFIX[i];
+      if (name.slice(0, p.length) === p && p.length < name.length && p.length <= max) {
+        cuts.push(p.length);
+        break;   /* PREFIX 按长度降序，首个命中即为最长的行政区划词 */
+      }
+    }
+    /* 1a+. 连接词边界：「…政务服务」|「和数据管理局」的「和」两侧。
+           仅作为候选参与打分，是否采用由步骤 2 决定。 */
+    for (var m = 0; m < name.length; m++) {
+      var ch = name.charAt(m);
+      if (CONJ.indexOf(ch) >= 0) {
+        if (m > 0) cuts.push(m);                 /* 断在连接词之前：「…服务」|「和数据…」 */
+        if (m + 1 < name.length) cuts.push(m + 1); /* 断在连接词之后：「…和」|「数据…」 */
+      }
+    }
+    /* 1b. 机构后缀之前：把后缀整体留给第二行 */
+    for (var j = 0; j < SUFFIX.length; j++) {
+      var s = SUFFIX[j];
+      var pos = name.lastIndexOf(s);
+      /* 后缀必须落在名称尾部（后面没有剩余字符） */
+      if (pos > 0 && pos + s.length === name.length) cuts.push(pos);
+    }
+    /* 1c. 长机构词的内部边界：「政务服务和数据管理局」拆成
+           「政务服务」|「和」|「数据管理局」，取「政务服务」「数据管理局」
+           之间的边界（即跳过连接词）。这一候选能解决 8 字上限下
+           「广东省政务服务和数据管理局」无干净断点的问题。 */
+    for (var q = 0; q < SUFFIX.length; q++) {
+      var sq = SUFFIX[q];
+      var sqPos = name.indexOf(sq);
+      if (sqPos <= 0) continue;
+      /* 在该长词内部，找出「连接词+1」的位置作为候选 */
+      for (var t = sqPos; t < sqPos + sq.length; t++) {
+        if (CONJ.indexOf(name.charAt(t)) >= 0 && t + 1 < name.length) cuts.push(t + 1);
+      }
+    }
+    /* 1d. 兜底：中点 */
+    cuts.push(Math.ceil(name.length / 2));
+
+    /* —— 步骤 2：在候选中打分，挑最优断点 ——
+       打分维度（从强到弱）：
+         A. 两行都不超长          —— 硬约束，违反重罚
+         B. 第二行是一个完整机构名 —— 最强正向信号（「人民政府门户网站」）
+         C. 第一行是一个完整地名   —— 次强正向信号（「广东省」「广州市增城区」）
+         D. 第二行以机构名开头     —— 中等正向信号
+         E. 行首非连接词、行尾非修饰字 —— 基础可读性
+         F. 两行长度均衡           —— 最弱，仅作同分时的微调 */
+    /* 地名尾字：第一行以这些字结尾，说明它很可能是一个完整行政区划名 */
+    var REGION_TAIL = "省市区县镇乡村";
+    var best = -1, bestScore = -1e9;
+    var probe = name + "|";
+    for (var c = 0; c < cuts.length; c++) {
+      var cut = cuts[c];
+      if (cut <= 0 || cut >= name.length) continue;
+      var l1 = name.slice(0, cut), l2 = name.slice(cut);
+      var score = 0;
+
+      /* A. 硬约束：超长重罚。
+         惩罚系数必须高于一切语义加分之和（80+60+60+20=220），
+         否则会出现「为了保持机构名完整而让该行溢出、再递归切成三行」
+         的劣解（例如「广东省｜政务服务和数据管理局」9 字溢出）。
+         因此这里用 300/字，确保「能两行放完」永远优先于「语义完整」。 */
+      if (l1.length > max) score -= (l1.length - max) * 300;
+      if (l2.length > max) score -= (l2.length - max) * 300;
+
+      /* B/C/D. 语义完整性 */
+      var nameIsSuffix = SUFFIX.some(function (sf) { return l2 === sf; });         /* 第二行 = 完整机构名 */
+      var nameIsRegion = REGION_TAIL.indexOf(l1.charAt(l1.length - 1)) >= 0;       /* 第一行以地名尾字结尾 */
+      var l2StartsWithSuf = SUFFIX.some(function (sf) { return l2.indexOf(sf) === 0; });
+      if (nameIsSuffix) score += 80;
+      if (nameIsRegion) score += 60;
+      if (nameIsSuffix && nameIsRegion) score += 60;   /* 最理想的「地名｜机构名」结构 */
+      else if (l2StartsWithSuf) score += 20;
+
+      /* E. 基础可读性 —— 连接词归属规则。
+         中文排版惯例：并列结构「A和B」必须断开时，断点落在连接词「之后」，
+         即「A和」｜「B」（「广东省政务服务和」｜「数据管理局」）。
+         行尾悬一个连接词，读者会自然预期下一行是并列项，这是可接受写法；
+         反之「A」｜「和B」把连接词甩到行首，才是真正别扭的残句。
+         因此：行首连接词重罚（-110），行尾连接词仅轻罚（-15）。 */
+      if (CONJ.indexOf(l2.charAt(0)) >= 0) score -= 110;
+      if (CONJ.indexOf(l1.charAt(l1.length - 1)) >= 0) score -= 15;
+      /* E2. 孤字行：某一行只剩 1 个字（如「内蒙古自治区农牧｜厅」）——
+          中文标签里孤字行非常刺眼，给重罚促使其换一个更均衡的断点。 */
+      if (l1.length === 1 || l2.length === 1) score -= 120;
+
+      /* F. 长度均衡（权重最低） */
+      score -= Math.abs(l1.length - l2.length) * 2;
+
+      if (score > bestScore) { bestScore = score; best = cut; }
+    }
+    if (best <= 0) best = max;
+
+    var r1 = name.slice(0, best), r2 = name.slice(best);
+    /* —— 步骤 3：第二行仍超长时递归断行（最多三行） —— */
+    if (r2.length > max) {
+      var sub = smartWrap(r2, max);
+      if (sub.indexOf("\n") >= 0) return r1 + "\n" + sub;
+    }
+    return r1 + "\n" + r2;
+  }
+  window.smartWrap = smartWrap;
+
   /* ---------- 图标 ---------- */
   var ICO = {
     doc: '<svg viewBox="0 0 24 24"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h5"/><path d="M9 13h6M9 17h6"/></svg>',
@@ -79,11 +231,26 @@
       value: function (n) { this.animate(n); }
     },
     mounted: function () { this.animate(this.value); },
+    computed: {
+      /* A23 修复（"—%"问题）：qVal 在数据缺失时返回字符串 "—"（不是数字）。
+         原实现直接把它交给 animate()，Math.round("—" * ease) 得到 NaN，
+         且模板会把 unit="%" 照常拼上去，最终显示成毫无意义的「—%」。
+         这里统一判定：非有限数字时进入「缺失态」，显示 "—" 且隐藏单位。 */
+      isMissing: function () {
+        var v = this.value;
+        if (v === undefined || v === null || v === "") return true;
+        return isNaN(Number(v));
+      }
+    },
 methods: {
       qVal: qVal,
       qPct: qPct,
       animate: function (target) {
         var self = this;
+        /* A23：缺失值不做滚动动画，直接停在 0（由 fmt 显示 "—"）。 */
+        if (this.isMissing) { self.disp = 0; return; }
+        var num = Number(target);
+        if (!isFinite(num)) { self.disp = 0; return; }
         var dur = 800, t0 = null;
         // setTimeout 驱动: 后台/无头标签页 rAF 不触发, 数字会停 0
         function step() {
@@ -91,13 +258,15 @@ methods: {
           if (!t0) t0 = now;
           var p = Math.min((now - t0) / dur, 1);
           var ease = 1 - Math.pow(1 - p, 3);
-          self.disp = Math.round(target * ease);
+          self.disp = Math.round(num * ease);
           if (p < 1) setTimeout(step, 16);
-          else self.disp = target;
+          else self.disp = num;
         }
         step();
       },
       fmt: function () {
+        /* A23：缺失时返回 "—"，与 qVal 的语义保持一致。 */
+        if (this.isMissing) return "—";
         return this.noSep ? String(this.disp) : this.disp.toLocaleString();
       }
     },
@@ -106,7 +275,8 @@ methods: {
       '  <div class="kpi-ico" v-html="icon"></div>' +
       '  <div class="kpi-meta">' +
       '    <div class="kpi-label">{{ label }}</div>' +
-      '    <div class="kpi-value">{{ fmt() }}<small v-if="unit">{{ unit }}</small></div>' +
+      /* A23：单位只在有值时才渲染，杜绝「—%」这种拼接产物。 */
+      '    <div class="kpi-value">{{ fmt() }}<small v-if="unit && !isMissing">{{ unit }}</small></div>' +
       '    <div class="kpi-sub" v-if="sub" v-html="sub"></div>' +
       '  </div>' +
       '</div>'
@@ -121,6 +291,15 @@ methods: {
         trendNote: "", typeNote: "", topType: "",
         levelNote: "", sourceNote: ""
       };
+    },
+    computed: {
+      /* A18：趋势图副标题的年份区间由数据层动态推导，
+         不再写死「2020 – 2026」（实际数据为近五年 2022–2026）。 */
+      trendRange: function () {
+        var ys = (D.trend || []).map(function (t) { return t.year; });
+        if (!ys.length) return "—";
+        return Math.min.apply(null, ys) + " – " + Math.max.apply(null, ys);
+      }
     },
     mounted: function () {
       var self = this;
@@ -141,25 +320,48 @@ methods: {
         var n = samePeriod(y);
         if (n > bestN) { bestN = n; bestY = y; }
       });
-      this.trendNote = "<b>2026 年 1–9 月发文 " + ys + " 条，同比 2025 年同期（" + prevN + " 条）增长 " + yoy + "%</b>" +
+      /* A14 修复（口径误导）：此前的文案「2026 年 1–9 月发文 273 条，同比增长 74%」
+         与右侧柱状图（2025=236 / 2026=273，视觉仅 +15.7%）构成冲突——
+         同一屏出现两个「增长率」，读者会认为其中之一是错的。
+         根因是两个口径不同：柱状图是「全年 vs 全年」，本句是「1–9 月 vs 1–9 月」。
+         现把口径显式写在句子里，并同时给出全年口径，消除歧义。 */
+      /* A14b 修复：trend 的 year 字段是「字符串」（"2022"…"2026"），
+         原写法 t.year === 2025 用数字比较，永远匹配不到 → 全年口径算出 0 条 / +0%。
+         统一转成字符串再比，并抽出小工具函数避免同类错误复现。 */
+      function trendCount(y) {
+        var hit = D.trend.find(function (t) { return String(t.year) === String(y); });
+        return hit ? hit.count : 0;
+      }
+      var fullPrev = trendCount(2025);
+      var fullCur = trendCount(2026);
+      var fullYoy = fullPrev > 0 ? Math.round((fullCur - fullPrev) / fullPrev * 100) : 0;
+      this.trendNote = "<b>同期口径（1–9 月）：2026 年 " + ys + " 条 vs 2025 年 " + prevN +
+        " 条，增长 " + yoy + "%</b>" +
         (ys >= bestN ? "，为近五年同期最高" : "，低于 " + bestY + " 年同期（" + bestN + " 条）") +
-        "；年度数据截至 9 月底，与『百千万工程』从铺开转向深化落地相吻合。";
+        "；全年口径（柱状图）：2026 年 " + fullCur + " 条 vs 2025 年 " + fullPrev +
+        " 条（+ " + fullYoy + "%）。两个口径不可混用，差额来自 2026 年数据截至 9 月底" +
+        "，与『百千万工程』从铺开转向深化落地相吻合。";
       // 结论条：类型
       var top = D.by_type.slice().sort(function (a, b) { return b.count - a.count; })[0];
       var sum = D.total_policy;
       this.topType = top.type;
+      /* A19 修复（无支撑文案）：原句写「主要为政策解读 / 规划 / 预案类」，
+         但数据层并没有「解读 / 规划 / 预案」这个字段或分类，
+         属于无数据支撑的主观描述，与全站「每个结论都能在数据层找到出处」
+         的原则冲突。现改为只陈述数据层确实存在的两个事实：
+         ① top 类别的占比；② 第二、三大类的实际条数。 */
       this.typeNote = "『<b>" + top.type + "</b>』占比最高（" + top.count + " 条 / " +
-        Math.round(top.count / sum * 100) + "%），主要为政策解读 / 规划 / 预案类；" +
+        Math.round(top.count / sum * 100) + "%）；" +
         "产业发展（" + (D.by_type.find(function (t) { return t.type === "产业发展"; }) || { count: 0 }).count +
-        "）+ 乡村振兴（" + (D.by_type.find(function (t) { return t.type === "乡村振兴"; }) || { count: 0 }).count +
-        "）是实质高频主题。";
+        " 条）+ 乡村振兴（" + (D.by_type.find(function (t) { return t.type === "乡村振兴"; }) || { count: 0 }).count +
+        " 条）构成实质高频主题。";
       // 结论条：层级构成
       var bl = D.by_level || [];
       var lv = bl.map(function (l) { return "<b>" + l.level + "</b> " + l.count + " 条"; }).join(" · ");
       var lvCountry = (bl.find(function (l) { return l.level === "国家级"; }) || {}).count || 0;
       var lvCounty = (bl.find(function (l) { return l.level === "县级"; }) || {}).count || 0;
       this.levelNote = "共 <b>" + D.total_policy + "</b> 条 = " + lv +
-        "；国家级为政策环境背景（" + lvCountry + " 条），县级为五县本地落地政策（" + lvCounty + " 条），层级映射在数据层定义、可逐级下钻至来源站点。";
+        "；国家级为政策环境背景（" + lvCountry + " 条），县级为粤西五县本地落地政策（" + lvCounty + " 条，即徐闻/遂溪/阳春/阳西/高州），层级映射在数据层定义、可逐级下钻至来源站点。";
       // 结论条：来源构成
       var bs = D.by_source.slice().sort(function (a, b) { return b.count - a.count; });
       var topSrc = bs[0], ctySum = (bl.find(function (l) { return l.level === "县级"; }) || { count: 0 }).count;
@@ -181,7 +383,13 @@ methods: {
           var maxI = counts.indexOf(Math.max.apply(null, counts));
           EChartsLib.make(el1, {
             animationDuration: 900, animationEasing: "cubicOut",
-            grid: { left: 44, right: 24, top: 40, bottom: 30 },
+            /* A12 修复：原 grid.right=24，而「均值 241.6」标签实测宽约 51px，
+               且 markLine label 默认贴着右端对齐 → 文本被容器裁掉一半，
+               只看得见「均值」。改为 right=64 预留标签宽度，并显式指定
+               标签内边距，保证「均值 xxx」完整落在画布内。 */
+            /* grid.top 由 40 → 52：峰值 markPoint 圆直径为 58px、圆心落在最大值柱顶，
+               上半圆会向上探出约 29px，若 top 仍是 40 会被容器裁掉一截。 */
+            grid: { left: 44, right: 64, top: 52, bottom: 30 },
             tooltip: {
               trigger: "axis", backgroundColor: NAV, borderWidth: 0,
               textStyle: { color: "#fff", fontSize: 12 },
@@ -213,18 +421,41 @@ methods: {
               }),
               label: {
                 show: true, position: "top", color: "#6B7280", fontSize: 11, fontWeight: 600,
-                formatter: function (p) { return p.value >= 10 ? p.value : ""; }
+                /* A12 修复：柱顶数值与 markPoint 峰值气泡会重叠（尤其当年值为最大值时），
+                   因此把「最大值那根柱」的数值标签隐藏，改由气泡统一表达「峰值 n」。 */
+                formatter: function (p) {
+                  if (p.dataIndex === maxI) return "";     /* 交给 markPoint 表达 */
+                  return p.value >= 10 ? p.value : "";
+                }
               },
               markLine: {
                 symbol: "none", silent: true,
                 lineStyle: { type: "dashed", color: "#98A2B3", width: 1 },
-                label: { color: "#98A2B3", fontSize: 10.5, formatter: "均值 {c}" },
+                /* A12c 修复（第三版，最终解）：均值线 y≈241.6 恰好夹在
+                   2022 年 230 与 2024 年 265 两条柱的数值标签高度之间，
+                   横向无论放左（撞 230）还是放右（撞峰值 273 气泡）都会重叠。
+                   根本原因是「同一水平带上同时存在均值线与柱顶数字」。
+                   解法：用 offset 把均值标签竖直上移 13px（约一个字高 + 间隙），
+                   脱离柱顶数字所在的 11px 文字带，横向仍放右侧留白。 */
+                label: {
+                  color: "#98A2B3", fontSize: 10.5,
+                  position: "end", distance: 2, offset: [0, -13],
+                  formatter: function (p) { return "均值 " + Math.round(p.value * 10) / 10; }
+                },
                 data: [{ type: "average" }]
               },
               markPoint: {
-                symbol: "circle", symbolSize: 54, silent: true,
-                itemStyle: { color: "#F59E0B" },
-                label: { color: "#fff", fontSize: 10.5, fontWeight: 700, formatter: "峰值\n{c}" },
+                /* A12b 修复：上一版用 pin（水滴）形状 + offset:[0,2]，
+                   水滴的尖端在下、可写区域是上方圆弧，offset 把文字往尖端推，
+                   结果「峰值 273」被挤在窄处、视觉上糊成一团（截图可见）。
+                   改回圆形并把 symbolSize 提到 58，同时去掉 offset：
+                   圆形对「峰值\n273」两行文字的可容纳面积最大且居中。 */
+                symbol: "circle", symbolSize: 58, silent: true,
+                itemStyle: { color: "#F59E0B", shadowColor: "rgba(245,158,11,.4)", shadowBlur: 8 },
+                label: {
+                  color: "#fff", fontSize: 10.5, fontWeight: 700, lineHeight: 12,
+                  formatter: "峰值\n{c}"
+                },
                 data: [{ type: "max" }]
               }
             }]
@@ -287,9 +518,13 @@ methods: {
               data: D.by_type.map(function (t, i) {
                 return {
                   name: t.type, value: t.count,
+                  /* A17 修复（死代码）：原写法 color: i===0 ? PALETTE[i] : PALETTE[i]
+                     两个分支完全相同，等价于 PALETTE[i]；后面那句
+                     shadowBlur: t.type === "综合政务" ? 0 : 0 同样恒为 0，
+                     且「综合政务」并不存在于本项目的 7 类主类字典中（属无效引用）。
+                     直接取模取色，把「其他」类固定为灰，保证兜底类视觉上弱化。 */
                   itemStyle: {
-                    color: i === 0 ? PALETTE[i] : PALETTE[i],
-                    shadowBlur: t.type === "综合政务" ? 0 : 0
+                    color: t.type === "其他" ? "#C3CCDB" : PALETTE[i % PALETTE.length]
                   }
                 };
               })
@@ -411,7 +646,9 @@ methods: {
       '  </div>' +
       '  <div class="grid grid-2" style="margin-top:18px;">' +
       '    <div class="card">' +
-      '      <div class="card-hd"><h3>政策数量年度趋势</h3><span class="more">2020 – 2026</span></div>' +
+      /* A18 修复：原副标题写死「2020 – 2026」，但数据层 trend 实际只有
+         2022–2026（近五年口径）。改为由数据层动态算出年份区间，避免标题说谎。 */
+      '      <div class="card-hd"><h3>政策数量年度趋势</h3><span class="more">{{ trendRange }}</span></div>' +
       '      <div class="card-bd">' +
       '        <div class="chart-note" v-html="trendNote"></div>' +
       '        <div class="chart-box"><div class="sk skeleton" style="position:absolute;inset:0;z-index:2;"></div><div id="ov-trend" style="width:100%;height:300px;"></div></div>' +
@@ -468,6 +705,12 @@ methods: {
     },
     computed: {
       typeOptions: function () {
+        /* A20 修复（合计歧义）：原先下拉里是「全部类型（1208）」紧接
+           「产业发展（280）」「乡村振兴（190）」…，用户容易把 1208 与各分类
+           相加得出 2416，误以为数据翻倍。这里保留 type 的哨兵值不变
+           （filter 逻辑依赖 t.type === "全部类型" 判空），仅把展示文案
+           改成「全部类型（合计 N 条）」，用「合计」打断加总错觉。
+           具体文案拼接在模板层完成，见下面 option 的 :label 绑定。 */
         var s = [{ type: "全部类型", count: D.total_policy }];
         return s.concat(D.by_type.slice());
       },
@@ -549,7 +792,7 @@ methods: {
       var lvCountry = (bl.find(function (l) { return l.level === "国家级"; }) || {}).count || 0;
       var lvCounty = (bl.find(function (l) { return l.level === "县级"; }) || {}).count || 0;
       this.levelNote = "共 <b>" + D.total_policy + "</b> 条 = " + lv +
-        "；国家级为政策环境背景（" + lvCountry + " 条），县级为五县本地落地政策（" + lvCounty + " 条），层级映射在数据层定义、可逐级下钻至来源站点。";
+        "；国家级为政策环境背景（" + lvCountry + " 条），县级为粤西五县本地落地政策（" + lvCounty + " 条，即徐闻/遂溪/阳春/阳西/高州），层级映射在数据层定义、可逐级下钻至来源站点。";
       // 结论条：来源构成
       var bs = D.by_source.slice().sort(function (a, b) { return b.count - a.count; });
       var topSrc = bs[0], ctySum = (bl.find(function (l) { return l.level === "县级"; }) || { count: 0 }).count;
@@ -565,6 +808,9 @@ methods: {
       sortBy: function (key) {
         if (this.sortKey === key) { this.sortDir = -this.sortDir; }
         else { this.sortKey = key; this.sortDir = -1; }
+        /* A21 修复：排序会改变数据顺序，若仍停在第 N 页，用户会看到「换了排序
+           但行内容没变」的错觉（其实只是翻到了另一批数据）。排序后统一回到第 1 页。 */
+        this.page = 1;
       },
       sortIcon: function (key) {
         if (this.sortKey !== key) return "";
@@ -603,15 +849,25 @@ methods: {
               bottom: 2, icon: "circle", itemWidth: 9, itemHeight: 9, itemGap: 14,
               textStyle: { color: "#4B5563", fontSize: 11.5 }
             },
-            graphic: tot ? [{
-              type: "text", left: "50%", top: "36%",
-              style: {
-                text: String(tot) + "\n条", textAlign: "center",
-                fontSize: 21, fontWeight: 700, fill: "#1F2A37", lineHeight: 25,
-                backgroundColor: "rgba(255,255,255,.94)",
-                padding: [8, 16], borderRadius: 10
-              }
-            }] : [],
+      /* A24 修复（假环）：筛选无命中时，原实现塞入 [{name:"无数据", value:1}]
+         画出一个完整的灰色圆环，视觉上等于「100% 无数据」，容易被误读成
+         「该类占比 100%」。现改为：无命中时 data 传空数组（不画环），
+         并用 graphic 在圆心直接写「无匹配」提示。 */
+      graphic: tot ? [{
+        type: "text", left: "50%", top: "36%",
+        style: {
+          text: String(tot) + "\n条", textAlign: "center",
+          fontSize: 21, fontWeight: 700, fill: "#1F2A37", lineHeight: 25,
+          backgroundColor: "rgba(255,255,255,.94)",
+          padding: [8, 16], borderRadius: 10
+        }
+      }] : [{
+        type: "text", left: "50%", top: "44%",
+        style: {
+          text: "当前筛选无匹配", textAlign: "center", textVerticalAlign: "middle",
+          fontSize: 12.5, fill: "#98A2B3"
+        }
+      }],
             series: [{
               name: "类型", type: "pie", radius: ["52%", "70%"], center: ["50%", "44%"],
               itemStyle: { borderColor: "#fff", borderWidth: 2.5, borderRadius: 5 },
@@ -625,7 +881,7 @@ methods: {
               emphasis: { scale: true, scaleSize: 6 },
               data: fd.length
                 ? fd.map(function (t, i) { return { name: t.type, value: t.count, itemStyle: { color: PALETTE[i % PALETTE.length] } }; })
-                : [{ name: "无数据", value: 1, itemStyle: { color: "#E5E9F0" } }]
+                : []   /* A24：不画假环，由上面的 graphic 给出「无匹配」提示 */
             }]
           });
         }
@@ -635,7 +891,7 @@ methods: {
           var maxPub = fp.length ? fp[0].count : 0;
           EChartsLib.make(el2, {
             animationDuration: 700,
-            grid: { left: 8, right: 40, top: 10, bottom: 16, containLabel: true },
+            grid: { left: 8, right: 44, top: 10, bottom: 16, containLabel: true },
             tooltip: {
               trigger: "axis", backgroundColor: NAV, borderWidth: 0,
               textStyle: { color: "#fff", fontSize: 12 },
@@ -653,13 +909,16 @@ methods: {
             yAxis: {
               type: "category", data: names,
               axisTick: { show: false }, axisLine: { show: false },
+              /* A11 修复：原实现按「每 6 字硬切」折行，13 字的
+                 「广东省政务服务和数据管理局」被切成 6+6+1，末行只剩一个「局」，
+                 且第三行溢出覆盖相邻条目（实测与「阳春市人民政府」重叠 60px²）。
+                 现改为 smartWrap()「语义断行」：断点只落在完整词组边界上，
+                 如「广东省政务服务和」/「数据管理局」，最多两行、无孤字行。
+                 lineHeight 同步由 15 提到 16，两行标签在 240px 高度里不显拥挤。 */
               axisLabel: {
-                color: "#4B5563", fontSize: 12, interval: 0,
+                color: "#4B5563", fontSize: 11.5, interval: 0, lineHeight: 16,
                 formatter: function (name) {
-                  if (name.length <= 6) return name;
-                  var out = [];
-                  for (var i = 0; i < name.length; i += 6) out.push(name.slice(i, i + 6));
-                  return out.join("\n");
+                  return smartWrap(name, 8);
                 }
               }
             },
@@ -791,7 +1050,7 @@ methods: {
       '  <div class="filter-bar">' +
       '    <div class="f-item"><label>类型</label>' +
       '      <select v-model="type">' +
-      '        <option v-for="t in typeOptions" :value="t.type === \'全部类型\' ? \'\' : t.type">{{ t.type }}（{{ t.count }}）</option>' +
+      '        <option v-for="t in typeOptions" :value="t.type === \'全部类型\' ? \'\' : t.type">{{ t.type === \'全部类型\' ? \'全部类型（合计 \' + t.count + \' 条）\' : t.type + \'（\' + t.count + \'）\' }}</option>' +
       '      </select></div>' +
       '    <div class="f-item"><label>年份</label>' +
       '      <select v-model="year">' +
@@ -814,7 +1073,10 @@ methods: {
       '      <div class="card-hd"><h3>发布机构 TOP（当前筛选）</h3></div>' +
       '      <div class="card-bd">' +
       '        <div class="chart-note" v-html="pubNote"></div>' +
-      '        <div class="chart-box h-sm"><div class="sk skeleton" style="position:absolute;inset:0;z-index:2;"></div><div id="pl-pub" style="width:100%;height:240px;"></div></div>' +
+      /* A11 修复：发布机构标签改为「语义断行」后普遍占两行，240px 放 8 条会明显拥挤，
+         且左列「类型分布」是饼图（无行数压力），两列等高档位不影响观感。
+         故本图容器提高到 290px，给每条腾出 ~36px（两行文字 32px + 间距）。 */
+      '        <div class="chart-box h-sm"><div class="sk skeleton" style="position:absolute;inset:0;z-index:2;"></div><div id="pl-pub" style="width:100%;height:290px;"></div></div>' +
       '      </div>' +
       '    </div>' +
       '  </div>' +
@@ -860,13 +1122,37 @@ methods: {
     data: function () {
       return {
         D: D,
-        cards: [
-          { name: "遂溪县", city: "湛江市", industry: "火龙果 · 北运菜产业", count: 0, img: "suixi", tag: "火龙果" },
-          { name: "阳西县", city: "阳江市", industry: "海洋渔业 · 调味品产业", count: 0, img: "yangxi", tag: "海洋渔业" },
-          { name: "徐闻县", city: "湛江市", industry: "菠萝产业 · 中国菠萝之乡", count: 0, img: "xuwen", tag: "菠萝之乡" },
-          { name: "阳春市", city: "阳江市", industry: "春砂仁南药 · 鳜鱼产业", count: 0, img: "yangchun", tag: "南药之乡" },
-          { name: "高州市", city: "茂名市", industry: "荔枝龙眼产业 · 中国荔乡", count: 0, img: "gaozhou", tag: "中国荔乡" }
-        ],
+        /* A22 修复（硬编码 + 静默归零）：
+           原实现把 5 个县名、所属市、产业文案全部写死在此数组里，
+           created 时用 D.by_county.find(x => x.county === c.name) 取条数，
+           一旦数据层把县名改成「阳春市（县级市）」这类写法，find 失配后
+           静默回落到 0，页面显示「阳春市 0 条」而不报错——属于最难发现的缺陷。
+           现改为：县名 / 所属市 / 产业描述一律从 D.counties（数据层维度表）读取，
+           这里只保留「视觉专属」字段（配图 key、标签），并按县名做键映射。
+           映射不到时不再静默，改为显式打印告警并在卡片上标注「口径待核对」。 */
+        cards: (function () {
+          /* 视觉层专属配置：img 为配图目录名，tag 为卡片角标 */
+          var VISUAL = {
+            "遂溪县": { img: "suixi", tag: "火龙果" },
+            "阳西县": { img: "yangxi", tag: "海洋渔业" },
+            "徐闻县": { img: "xuwen", tag: "菠萝之乡" },
+            "阳春市": { img: "yangchun", tag: "南药之乡" },
+            "高州市": { img: "gaozhou", tag: "中国荔乡" }
+          };
+          var src = (D.counties && D.counties.length) ? D.counties : [];
+          return src.map(function (c) {
+            var v = VISUAL[c.name] || {};
+            return {
+              name: c.name,
+              city: c.city || "—",
+              industry: c.industry || "—",
+              count: 0,
+              img: v.img || "",
+              tag: v.tag || "",
+              matched: !!VISUAL[c.name]
+            };
+          });
+        })(),
         coverNote: "", observeNote: ""
       };
     },
@@ -874,7 +1160,15 @@ methods: {
       var self = this;
       this.cards.forEach(function (c) {
         var m = D.by_county.find(function (x) { return x.county === c.name; });
-        c.count = m ? m.count : 0;
+        /* A22：失配不再静默——打日志 + 置 matched=false，模板会显式提示。 */
+        if (m) { c.count = m.count; }
+        else {
+          c.count = 0;
+          c.matched = false;
+          if (window.console && console.warn) {
+            console.warn("[CountyView] 数据层 by_county 缺少县域「" + c.name + "」，卡片计数回落为 0，请核对字典口径。");
+          }
+        }
       });
     },
     mounted2: null,
@@ -899,7 +1193,7 @@ methods: {
       var lvCountry = (bl.find(function (l) { return l.level === "国家级"; }) || {}).count || 0;
       var lvCounty = (bl.find(function (l) { return l.level === "县级"; }) || {}).count || 0;
       this.levelNote = "共 <b>" + D.total_policy + "</b> 条 = " + lv +
-        "；国家级为政策环境背景（" + lvCountry + " 条），县级为五县本地落地政策（" + lvCounty + " 条），层级映射在数据层定义、可逐级下钻至来源站点。";
+        "；国家级为政策环境背景（" + lvCountry + " 条），县级为粤西五县本地落地政策（" + lvCounty + " 条，即徐闻/遂溪/阳春/阳西/高州），层级映射在数据层定义、可逐级下钻至来源站点。";
       // 结论条：来源构成
       var bs = D.by_source.slice().sort(function (a, b) { return b.count - a.count; });
       var topSrc = bs[0], ctySum = (bl.find(function (l) { return l.level === "县级"; }) || { count: 0 }).count;
@@ -926,7 +1220,9 @@ methods: {
         var names = bc.map(function (c) { return c.county; });
         EChartsLib.make(el, {
           animationDuration: 900,
-          grid: { left: 44, right: 24, top: 40, bottom: 28 },
+          /* A12 修复：同 ov-trend，right=24 装不下「均值 60」标签（实测约 47px），
+             文本会被画布裁切。改为 right=56。 */
+          grid: { left: 44, right: 56, top: 40, bottom: 28 },
           tooltip: {
             trigger: "axis", backgroundColor: NAV, borderWidth: 0,
             textStyle: { color: "#fff", fontSize: 12 },
@@ -965,7 +1261,12 @@ methods: {
             markLine: {
               symbol: "none", silent: true,
               lineStyle: { type: "dashed", color: "#98A2B3", width: 1 },
-              label: { color: "#98A2B3", fontSize: 10.5, formatter: "均值 {c}" },
+              /* A12 修复：标签贴右边界会被裁切，改靠内侧显示并固定 1 位小数。 */
+              label: {
+                color: "#98A2B3", fontSize: 10.5,
+                position: "insideEndTop", distance: 2,
+                formatter: function (p) { return "均值 " + Math.round(p.value * 10) / 10; }
+              },
               data: [{ type: "average" }]
             }
           }]
@@ -1041,9 +1342,17 @@ methods: {
         return arr;
       },
       // 项目覆盖的县域数（字典 §4 county_name 打标结果）
+      // A13 修复：原实现只判断 p.county 是否为真值，若数据里 county 字段
+      // 直接写成字符串 "未标注"（而非留空），会被当作一个真实县域计入，
+      // 导致 KPI 显示「涉及县域 6 个」而实际有效归属只有 5 个。
+      // 这里显式排除占位值，只统计真实县级行政区划名。
       projectCountyCount: function () {
+        var PLACEHOLDER = ["未标注", "未知", "待补充", "无", "-", "—", ""];
         var set = {};
-        D.project_sample.forEach(function (p) { if (p.county) set[p.county] = 1; });
+        D.project_sample.forEach(function (p) {
+          var c = (p.county || "").trim();
+          if (c && PLACEHOLDER.indexOf(c) < 0) set[c] = 1;
+        });
         return Object.keys(set).length;
       },
       // 县域分布（含「未标注」）：用于项目页底部明细，避免大屏下方留白
@@ -1116,6 +1425,8 @@ methods: {
       },
       sortBy: function (k) {
         if (this.sortKey === k) { this.sortDir = -this.sortDir; } else { this.sortKey = k; this.sortDir = -1; }
+        /* A21 修复：同政策页，排序后回到第 1 页，避免「排序没生效」的错觉。 */
+        this.page = 1;
       },
       sortIcon: function (k) { return this.sortKey === k ? (this.sortDir < 0 ? "↓" : "↑") : ""; },
       goPage: function (p) { if (p >= 1 && p <= this.totalPages) this.page = p; },
@@ -1130,7 +1441,7 @@ methods: {
       '  <div class="grid grid-4">' +
       '    <KpiCard label="招商项目" :value="D.total_project" unit="个" sub="省农业农村厅「招商项目」栏目" :icon="ICO.project" tone="rgba(16,185,129,.10)" color="#10B981"/>' +
       '    <KpiCard label="最新项目" :value="Number(latestDate ? latestDate.slice(0,4) : 0)" unit="年" :no-sep="true" :sub="\'更新至 \' + (latestDate || \'—\')" :icon="ICO.clock" tone="rgba(63,114,175,.10)" color="#3F72AF"/>' +
-      '    <KpiCard label="涉及县域" :value="projectCountyCount" unit="个" sub="按项目名归属地打标" :icon="ICO.map" tone="rgba(245,158,11,.10)" color="#F59E0B"/>' +
+      '    <KpiCard label="涉及县域" :value="projectCountyCount" unit="个" sub="粤北粤东，与政策页五县不同" :icon="ICO.map" tone="rgba(245,158,11,.10)" color="#F59E0B"/>' +
       '    <KpiCard label="数据状态" :value="qVal(D.quality && D.quality.link_checked_rate)" unit="%" sub="链接可追溯 · 可复核" :icon="ICO.shield" tone="rgba(139,92,246,.10)" color="#8B5CF6"/>' +
       '  </div>' +
       '  <div class="card" style="margin-top:18px;">' +
@@ -1196,6 +1507,8 @@ methods: {
       '  </div>' +
       '  <p class="footnote">' +
       '    口径说明：项目表为 2026-09-08 单日快照，与政策表的「近五年」口径不可直接比较；' +
+      '    本页县域来自项目名称中的归属地（粤北粤东：蕉岭/东源/连平/南雄/和平），' +
+      '    与「政策」页的粤西五县（徐闻/遂溪/阳春/阳西/高州）为两套不同口径，两者不重合、不可混用；' +
       '    「未标注」表示项目名称未出现可判定的县级行政区划（多为村/镇级项目），按字典 §4 规则如实标注，未做人工臆测填充。' +
       '  </p>' +
       '</div>',
@@ -1241,11 +1554,14 @@ methods: {
             { name: "阳春市人民政府门户", site: "yangchun.gov.cn 规划计划", mode: "静态栏目直抓", rows: rc[alias["阳春市人民政府门户"]] || 0, note: "春砂仁南药/鳜鱼产业、新型城镇化试点" },
             { name: "广东省政务服务和数据管理局", site: "zfsg.gd.gov.cn 政策法规", mode: "静态列表 + 详情页解析", rows: rc[alias["广东省政务服务和数据管理局"]] || 0, note: "含文号，如《公共数据资源授权运营管理办法》粤政数〔2026〕9号" },
             { name: "高州市人民政府门户", site: "gaozhou.gov.cn 政务公开", mode: "静态栏目直抓（首页）", rows: rc[alias["高州市人民政府门户"]] || 0, note: "栏目结构限制，收录较少（如实标注）" },
-            { name: "广东省农业农村厅（招商项目）", site: "dara.gd.gov.cn 招商项目", mode: "静态列表 + 翻页", rows: 60, note: "县域招商项目发布（独立项目表；2026-09-08 单日快照，与政策近五年口径不可比，已在页面标注）" }
+            /* A16 修复（硬编码）：原为 rows: 60 字面量，违反本文件头
+               「看板数值禁止硬编码，一律绑定数据层」的声明。
+               改为绑定 D.total_project（数据层真实项目总数）。 */
+            { name: "广东省农业农村厅（招商项目）", site: "dara.gd.gov.cn 招商项目", mode: "静态列表 + 翻页", rows: D.total_project || 0, note: "县域招商项目发布（独立项目表；2026-09-08 单日快照，与政策近五年口径不可比，已在页面标注）" }
           ];
         })(),
         stack: [
-          { layer: "数据采集", tech: "Python · requests + BeautifulSoup4", note: "10 个来源脚本（含国家级/省级/县级）+ 翻页/去重/近五年过滤" },
+          { layer: "数据采集", tech: "Python · requests + BeautifulSoup4", note: "9 个政策来源脚本（国家级 1 + 省级 3 + 县级 5）+ 1 个招商项目来源；含翻页/去重/近五年过滤" },
           { layer: "数据治理", tech: "Pandas 清洗 · 规则打标", note: "标题去噪、摘要清洗、机构归一、类型初标" },
           { layer: "数据存储", tech: "SQLite + FTS5 trigram", note: "四表模型：维度表×1 + 事实表×2 + FTS5 全文索引" },
           { layer: "数据应用", tech: "Vue 3 + Apache ECharts 5 + 自研 hash 路由", note: "本地资源零 CDN，file:// 双击即开" }
@@ -1273,7 +1589,11 @@ methods: {
       '      <div class="metric"><b>{{ D.counties.length }}</b><span>覆盖县域</span></div>' +
       '      <div class="metric" :class="(D.quality && D.quality.required_fill_rate >= 0.9999) ? \'ok\' : \'\'"><b>{{ qPct(D.quality && D.quality.required_fill_rate) }}</b><span>必填完整率</span></div>' +
       '      <div class="metric" :class="(D.quality && D.quality.link_checked_rate >= 0.9999) ? \'ok\' : \'\'"><b>{{ qPct(D.quality && D.quality.link_checked_rate) }}</b><span>链接校验通过率</span></div>' +
-      '      <div class="metric ok"><b>{{ (D.quality && D.quality.label_coverage) ? D.quality.label_coverage.toLocaleString() : \'—\' }}</b><span>标签覆盖率</span></div>' +
+      /* A15 修复（单位歧义）：label_coverage 的实际值是「条数」（1208 条），
+         不是百分比。原标签写作「标签覆盖率」，与同排的「必填完整率 100%」
+         「链接校验通过率 100%」并列，极易被读成「1208%」。
+         现改为「已打标条数」，并补上单位「条」，语义与单位都对得上。 */
+      '      <div class="metric ok"><b>{{ (D.quality && D.quality.label_coverage) ? D.quality.label_coverage.toLocaleString() : \'—\' }}</b><span>已打标条数（条）</span></div>' +
       '      <div class="metric" :class="(D.quality && D.quality.type_main_covered === \'7/7\') ? \'ok\' : \'\'"><b>{{ (D.quality && D.quality.type_main_covered) || \'—\' }}</b><span>主类覆盖</span></div>' +
       '    </div></div>' +
       '  </div>' +
