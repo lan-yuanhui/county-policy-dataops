@@ -123,39 +123,48 @@ window.DASHBOARD_DATA = {
   ],
   "by_source": [
     {
-      "source": "高州市政府",
+      "source": "高州市人民政府门户",
+      "short": "高州市人民政府",
       "count": 4
     },
     {
-      "source": "遂溪县政府",
+      "source": "遂溪县人民政府门户",
+      "short": "遂溪县人民政府",
       "count": 108
     },
     {
-      "source": "徐闻县政府",
+      "source": "徐闻县人民政府门户",
+      "short": "徐闻县人民政府",
       "count": 82
     },
     {
-      "source": "阳春市政府",
+      "source": "阳春市人民政府门户",
+      "short": "阳春市人民政府",
       "count": 18
     },
     {
-      "source": "阳西县政府",
+      "source": "阳西县人民政府门户",
+      "short": "阳西县人民政府",
       "count": 88
     },
     {
-      "source": "省农业农村厅",
+      "source": "广东省农业农村厅",
+      "short": "广东省农业农村厅",
       "count": 218
     },
     {
-      "source": "省政府门户",
+      "source": "广东省人民政府门户网站",
+      "short": "广东省政府门户",
       "count": 39
     },
     {
       "source": "农业农村部",
+      "short": "农业农村部",
       "count": 643
     },
     {
-      "source": "省政数局",
+      "source": "广东省政务服务和数据管理局",
+      "short": "广东省政数局",
       "count": 8
     }
   ],
@@ -175,15 +184,15 @@ window.DASHBOARD_DATA = {
       "count": 265,
       "sources": [
         {
-          "name": "省农业农村厅",
+          "name": "广东省农业农村厅",
           "count": 218
         },
         {
-          "name": "省政府门户",
+          "name": "广东省人民政府门户网站",
           "count": 39
         },
         {
-          "name": "省政数局",
+          "name": "广东省政务服务和数据管理局",
           "count": 8
         }
       ]
@@ -193,23 +202,23 @@ window.DASHBOARD_DATA = {
       "count": 300,
       "sources": [
         {
-          "name": "高州市政府",
+          "name": "高州市人民政府门户",
           "count": 4
         },
         {
-          "name": "遂溪县政府",
+          "name": "遂溪县人民政府门户",
           "count": 108
         },
         {
-          "name": "徐闻县政府",
+          "name": "徐闻县人民政府门户",
           "count": 82
         },
         {
-          "name": "阳春市政府",
+          "name": "阳春市人民政府门户",
           "count": 18
         },
         {
-          "name": "阳西县政府",
+          "name": "阳西县人民政府门户",
           "count": 88
         }
       ]
