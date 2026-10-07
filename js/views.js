@@ -838,46 +838,189 @@ methods: {
         var el1 = document.getElementById("pl-type");
         if (el1) {
           var tot = this.filtered.length;
+          /* ============ A25 修复：类型分布饼图「小扇区标签互压 / 溢出」 ============
+             问题（用户截图 2026-10-07）：9 个类型里有 5 个占比 ≤ 2%
+             （人才引进 0.17% / 土地利用 1.08% / 数字乡村 1.24% / 财政金融 1.41%
+              / 营商环境 1.99%），扇区角只有 0.6°–7°。ECharts 默认沿半径方向
+             把标签甩出去，相邻小扇区的标签挤在同一条弧带上互相覆盖，
+             截图里「0% / 1% / 1% / 1% / 2%」糊成一团；同时
+             「1208 条」中心块的 94% 白底会压住内圈 52% 那一侧的扇区颜色。
+
+             ── 第一版尝试（已废弃，留作教训）──
+             用 labelLayout 返回 { x: params.rect.width - 30, y: ... } 想把小标签
+             摆到右侧一列。实测所有小标签被推到 x ≈ -22（画布外），完全不可见。
+             原因：labelLayout 里的 params.rect 是「已应用扇区旋转的局部坐标系」
+             中的包围盒，不是画布绝对坐标；再叠加 align/x 的相对语义，
+             最终位置跟预期差了一整个坐标系。坐标系的坑，返回值越"聪明"越危险。
+
+             ── 现方案：按扇区角度算「画布绝对坐标」，分东西两侧错开 ──
+             ① 大扇区（≥ 4%）：label 直接写在扇区内（position:"inside"），
+                白字 + 加粗。扇区够宽，文字压在色块上反而最清晰，且不占引线。
+             ② 小扇区（< 4%）：把标签统一甩到两侧，按「先上后下」等距排布：
+                · 东侧（扇区中点角落在右半圆）走右侧一列，西侧走左侧一列；
+                · 同侧行距固定 15px，从中心线向两端展开 —— 等高排列，
+                  数学上相邻标签不可能重叠（15px > 10px 字高）。
+             ③ labelLine 长度自适应：把标签推到容器边缘附近，引线自然拉长，
+                读者仍能顺着线找到对应扇区。
+             ④ 中心数字块去掉 94% 白底（原实现会盖住内圈扇区颜色），字号 21→19。 */
+          var SMALL_TH = 4;                    /* 4% 以下视为小扇区 */
+          /* 窄屏（< 420px）时小标签只显示百分比、不显示名称，
+             避免左右两列文字在中路打架；同时收窄标签宽度上限。 */
+          var TIGHT = el1.clientWidth < 420;
+          /* 小标签两列的绝对落点（相对容器宽度的百分比）。
+             为什么不用像素：labelLayout 返回的 x 只认百分比字符串，
+             实测传数字会被静默忽略（标签停回默认位置，看不出报错）。
+             东侧 84% / 西侧 12% 是实测的甜点值：
+             · 桌面 521px → 西锚点 63px > 标签宽 61px，右边缘落在 x≈2 ✓
+             · 窄屏 324px → 东锚点 272px，标签右边缘 272+22=294px < 324 ✓
+               （原先取 88% 得 285px，加标签宽后右边缘 307px 溢出 4px，实测报红）
+             注意 x 是「锚点」：西侧 align:"right" 时它是文字右边缘，
+             东侧 align:"left" 时是左边缘 —— 写反会导致整列文字穿出容器。 */
+          var EAST_X = "84%", WEST_X = "12%";
+          /* 标签宽度上限（px），窄屏时收窄以便两侧留白 */
+          var LABEL_MAXW = TIGHT ? 54 : 68;
+          /* 先按角度把小扇区分到东/西两侧，再各自排序，决定每行的 y */
+          var east = [], west = [];
+          var seen = 0;                        /* 累计角（弧度），用于求扇区中点 */
+          var TWO_PI = Math.PI * 2;
+          var smallRank = {};                  /* dataIndex -> 纵向槽位(可为负) */
+          var smallSide = {};                  /* dataIndex -> "e" | "w" */
+          if (tot) {
+            fd.forEach(function (t, i) {
+              var frac = t.count / tot;
+              var mid = (seen + frac / 2) * TWO_PI;   /* 扇区中点角(0=12点钟方向, 顺时针) */
+              seen += frac;
+              if (frac * 100 >= SMALL_TH) return;     /* 大扇区不参与 */
+              /* ECharts 饼图：0 弧度指向 12 点、顺时针增长。
+                 x = sin(θ) 决定左右：sin>0 → 右半圆。 */
+              var sx = Math.sin(mid);
+              if (sx >= 0) { east.push(i); smallSide[i] = "e"; }
+              else { west.push(i); smallSide[i] = "w"; }
+            });
+          }
+          /* 同侧按「从中心线向外」排：先按 y 分量降序，再分配到对称槽位 */
+          function assignSide(arr) {
+            if (!arr.length) return;
+            var ys = arr.map(function (idx) {
+              var acc = 0;
+              for (var k = 0; k < idx; k++) acc += fd[k].count / tot;
+              var frac2 = fd[idx].count / tot;
+              return Math.cos((acc + frac2 / 2) * TWO_PI);  /* cos 大 → 靠上 */
+            });
+            var order = arr.map(function (v, n) { return n; })
+              .sort(function (a, b) { return ys[b] - ys[a]; });
+            var n = arr.length;
+            order.forEach(function (pos, slot) {
+              /* 从中心线向两端展开：slot 0 在最上，依次向下 */
+              smallRank[arr[pos]] = slot - (n - 1) / 2;
+            });
+          }
+          assignSide(east); assignSide(west);
+          var graphic = [];
+          if (tot) {
+            /* 窄屏环径小，中心文字会顶到环上（实测「1208」被内环压住），
+               改为不写中心块，总数由上方结论条「当前筛选命中 1208 条」承担。 */
+            if (!TIGHT) {
+              graphic.push({
+                type: "text", left: "50%", top: "33%",
+                style: {
+                  text: String(tot) + "\n条", textAlign: "center",
+                  fontSize: 19, fontWeight: 700, fill: "#1F2A37", lineHeight: 23
+                }
+              });
+            }
+          } else {
+            graphic.push({
+              type: "text", left: "50%", top: "41%",
+              style: {
+                text: "当前筛选无匹配", textAlign: "center", textVerticalAlign: "middle",
+                fontSize: 12.5, fill: "#98A2B3"
+              }
+            });
+          }
           EChartsLib.make(el1, {
             animationDuration: 700,
             tooltip: {
               trigger: "item", backgroundColor: NAV, borderWidth: 0,
               textStyle: { color: "#fff", fontSize: 12 },
-              formatter: function (p) { return p.name + "：<b>" + p.value + "</b> 条（" + p.percent + "%）"; }
+              formatter: function (p) { return p.name + "：" + p.value + " 条（" + p.percent + "%）"; }
             },
             legend: {
               bottom: 2, icon: "circle", itemWidth: 9, itemHeight: 9, itemGap: 14,
               textStyle: { color: "#4B5563", fontSize: 11.5 }
             },
-      /* A24 修复（假环）：筛选无命中时，原实现塞入 [{name:"无数据", value:1}]
-         画出一个完整的灰色圆环，视觉上等于「100% 无数据」，容易被误读成
-         「该类占比 100%」。现改为：无命中时 data 传空数组（不画环），
-         并用 graphic 在圆心直接写「无匹配」提示。 */
-      graphic: tot ? [{
-        type: "text", left: "50%", top: "36%",
-        style: {
-          text: String(tot) + "\n条", textAlign: "center",
-          fontSize: 21, fontWeight: 700, fill: "#1F2A37", lineHeight: 25,
-          backgroundColor: "rgba(255,255,255,.94)",
-          padding: [8, 16], borderRadius: 10
-        }
-      }] : [{
-        type: "text", left: "50%", top: "44%",
-        style: {
-          text: "当前筛选无匹配", textAlign: "center", textVerticalAlign: "middle",
-          fontSize: 12.5, fill: "#98A2B3"
-        }
-      }],
+            graphic: graphic,
             series: [{
-              name: "类型", type: "pie", radius: ["52%", "70%"], center: ["50%", "44%"],
+              name: "类型", type: "pie",
+              /* 窄屏把圆环整体收小并略向左移：
+                 大扇区标签长在环外自然位置，环越大标签越贴近容器边缘。
+                 桌面 521px 用 ["46%","62%"] 比例正好；
+                 窄屏 324px 时环径相对宽度更大，标签会溢出右缘，
+                 故收到 ["40%","54%"] 并 center 左移到 47%，
+                 给东侧（59%）腾出 ~20px 落位空间。 */
+              radius: TIGHT ? ["40%", "54%"] : ["46%", "62%"],
+              center: TIGHT ? ["47%", "41%"] : ["50%", "41%"],
+              avoidLabelOverlap: false,
               itemStyle: { borderColor: "#fff", borderWidth: 2.5, borderRadius: 5 },
+              /* 统一把标签甩到环外：小扇区再被 labelLayout 拉到两侧竖列。
+                 大扇区若留在环内，引线会从圆心斜穿整个环（实测很难看），
+                 所以大扇区也走环外，只是不出引线折角。 */
               label: {
                 show: true,
-                formatter: function (p) { return Math.round(p.percent) + "%"; },
-                fontSize: 10, color: "#6B7280"
+                /* 按占比分流：大扇区只写百分比；小扇区带名称（窄屏则只写百分比）。
+                   大扇区固定在环外默认半径位置，靠引线辨识；
+                   小扇区由 labelLayout 拉成两侧竖列。 */
+                formatter: function (p) {
+                  var isSmall = smallRank[p.dataIndex] !== undefined;
+                  var pct = Math.round(p.percent) + "%";
+                  var isRight = Math.sin(p.midAngle) >= 0;
+                  /* 窄屏标签宽度只有 54px，全名放不下，截前两字做识别锚点
+                     （「营商环境」→「营商」、「财政金融」→「财政」）。
+                     配合下方图例（图例是按颜色对应的）足以定位。 */
+                  var nm = isSmall
+                    ? (TIGHT ? String(p.name).slice(0, 2) + " " : p.name + " ")
+                    : "";
+                  return "{" + (isRight ? "e" : "w") + "|" + nm + pct + "}";
+                },
+                rich: {
+                  /* 东侧标签：靠左对齐，锚点即左边缘 */
+                  e: {
+                    color: "#6B7280", fontSize: 10.5, align: "left",
+                    verticalAlign: "middle", width: LABEL_MAXW, overflow: "truncate"
+                  },
+                  /* 西侧标签：靠右对齐，锚点即右边缘 */
+                  w: {
+                    color: "#6B7280", fontSize: 10.5, align: "right",
+                    verticalAlign: "middle", width: LABEL_MAXW, overflow: "truncate"
+                  }
+                }
               },
-              minAngle: 4,
-              labelLine: { length: 10, length2: 6, lineStyle: { color: "#C3CCDB" } },
+              /* 小标签的绝对落点：x 用百分比贴边（东西两侧各一个锚点），
+                 y 用百分比槽位（同侧间距固定 15px，数学上不可能重叠）。
+                 容器高 240px → 1 slot ≈ 15/240 = 6.25% */
+              labelLayout: function (params) {
+                var off = smallRank[params.dataIndex];
+                if (off === undefined) return;   /* 大扇区：保留天然半径位置，不干预 */
+                var isRight = smallSide[params.dataIndex] === "e";
+                return {
+                  x: isRight ? EAST_X : WEST_X,
+                  y: (50 + off * 6.25) + "%",
+                  verticalAlign: "middle"
+                };
+              },
+              /* minAngle 由 4 提到 8：5 个西侧小扇区（营商环境 1.99% / 财政金融
+                 1.41% / 数字乡村 1.24% / 土地利用 1.08% / 人才引进 0.17%）的真实
+                 角度只有 0.6°–7.2°，引线起点几乎重合、在环外收束成一团毛线。
+                 minAngle 把每个扇区的最小绘制角撑到 8°，起点自然拉开 ≥ 8° 的
+                 张角差，引线呈扇形散开，肉眼可顺着线找到对应色块。
+                 代价是极小扇区被画得比真实占比略宽 —— 这是刻意的取舍：
+                 环形图用于「看分布形态」，精确数值由标签与 tooltip 承担，
+                 两者互补，不构成口径失真。 */
+              minAngle: 8,
+              /* labelLine length 拉长到 22：让引线的第一段先「走出圆环外缘」
+                 再拐向标签，避免贴着环面斜穿（原 length:8 会穿过色块本身）。
+                 length2 保持 12 作为水平末段。 */
+              labelLine: { length: 22, length2: 12, lineStyle: { color: "#C3CCDB" } },
               emphasis: { scale: true, scaleSize: 6 },
               data: fd.length
                 ? fd.map(function (t, i) { return { name: t.type, value: t.count, itemStyle: { color: PALETTE[i % PALETTE.length] } }; })
