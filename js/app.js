@@ -83,7 +83,7 @@
       '      <span class="nav-ico" v-html="m.ico"></span><span>{{ m.label }}</span>' +
       '    </a>' +
       '  </nav>' +
-      '  <div class="side-foot">v2.0 · Vue3 + ECharts5 · 本地零 CDN</div>' +
+      '  <div class="side-foot">v2.1 · Vue3 + ECharts5 · 本地零 CDN</div>' +
       '</div>' +
       '<div class="main">' +
       '  <header class="topbar">' +
