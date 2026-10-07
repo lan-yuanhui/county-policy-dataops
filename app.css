@@ -451,6 +451,66 @@ table.dtable td .t-link:hover { color: var(--primary); }
 }
 .chart-note b { color: var(--primary-700); font-weight: 600; }
 
+/* ============ 县域观察卡（A26） ============
+   原实现只有一段静态文案，半宽卡片下方留白近 2/3，视觉空洞。
+   改为「4 条洞察（标签+数值+说明）+ 各县主导类型矩阵」，
+   用真实数据把卡片填满，同时与左侧「覆盖对比」结论条形成互补
+   （结论条讲谁多谁少，这里讲多在哪里、结构如何）。 */
+.obs-list { list-style: none; }
+.obs-list li {
+  padding: 9px 0 10px;
+  border-bottom: 1px dashed var(--border);
+}
+.obs-list li:last-child { border-bottom: none; }
+.obs-hd {
+  display: flex; align-items: baseline; gap: 9px; margin-bottom: 3px;
+}
+.obs-k {
+  font-size: 11.5px; color: var(--text-2); letter-spacing: .3px;
+  flex-shrink: 0;
+}
+.obs-k::before {
+  content: ""; display: inline-block; width: 3px; height: 11px;
+  background: var(--primary); border-radius: 2px;
+  margin-right: 7px; vertical-align: -1px;
+}
+.obs-v {
+  margin-left: auto; flex-shrink: 0;
+  font-size: 15px; font-weight: 700; color: var(--primary-700);
+  font-variant-numeric: tabular-nums; letter-spacing: .2px;
+}
+.obs-d {
+  font-size: 12.5px; color: var(--text-2); line-height: 1.75;
+  padding-left: 10px;
+}
+.obs-matrix {
+  margin-top: 14px; padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.obs-mt {
+  font-size: 11.5px; color: var(--text-3); letter-spacing: .5px;
+  margin-bottom: 9px;
+}
+.obs-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 5px 0; font-size: 12.5px;
+}
+.obs-n { flex-shrink: 0; width: 52px; color: var(--text-1); font-weight: 500; }
+.obs-bar {
+  flex: 1 1 60px; min-width: 40px; height: 6px; border-radius: 3px;
+  background: rgba(148,163,184,.18); overflow: hidden;
+}
+.obs-bar i {
+  display: block; height: 100%; border-radius: 3px;
+  background: linear-gradient(90deg, #5B8FD4, #3F72AF);
+  transition: width .6s ease;
+}
+.obs-t { flex-shrink: 0; width: 56px; color: var(--text-2); font-size: 12px; }
+.obs-c {
+  flex-shrink: 0; width: 44px; text-align: right;
+  color: var(--text-3); font-size: 11.5px; font-variant-numeric: tabular-nums;
+}
+
 /* 骨架屏 */
 .skeleton { position: relative; overflow: hidden; background: #EFF2F7; border-radius: 6px; }
 .skeleton::after {
