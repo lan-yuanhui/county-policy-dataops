@@ -249,34 +249,40 @@ methods: {
                 return name + "  " + (item ? item.count : "");
               }
             },
+            // A10 修复：ECharts graphic 的 left/top 默认以元素左上角为锚点，
+            // 原写法 left:"30%" 与 center:["30%","50%"] 看似对齐，实际文字整体右偏、
+            // 「条」字逼近环内壁。改为 textAlign/textVerticalAlign 双居中 + 用
+            // left/top 精确指向圆心，并去掉半透明白底（环内留白已足够，白底反而显脏）。
             graphic: [{
-              type: "text", left: "30%", top: "39%",
+              type: "text", left: "30%", top: "50%",
               style: {
-                text: tot + "\n条", textAlign: "center",
-                fontSize: 21, fontWeight: 700, fill: "#1F2A37", lineHeight: 25,
-                backgroundColor: "rgba(255,255,255,.94)",
-                padding: [8, 16], borderRadius: 10
+                text: tot + "\n条", textAlign: "center", textVerticalAlign: "middle",
+                fontSize: 22, fontWeight: 700, fill: "#1F2A37", lineHeight: 24,
+                fontFamily: "Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif"
               }
             }, {
-              type: "text", left: "30%", top: "62%",
-              style: { text: "政策总数", textAlign: "center", fontSize: 11.5, fill: "#98A2B3" }
+              type: "text", left: "30%", top: "50%",
+              style: {
+                text: "\n\n政策总数", textAlign: "center", textVerticalAlign: "middle",
+                fontSize: 11.5, fill: "#98A2B3", lineHeight: 24
+              }
             }],
             series: [{
               name: "类型", type: "pie", radius: ["56%", "76%"], center: ["30%", "50%"],
               avoidLabelOverlap: true,
               itemStyle: { borderColor: "#fff", borderWidth: 3, borderRadius: 6 },
-              // C8 修复：小占比扇区的外部「%」标签会与大扇区碰撞（20% 与 59% 叠字）。
-              // 右侧图例已完整给出「类目 + 条数」，此处扇区标签仅在切片足够大时显示，
-              // 小于 8% 的切片不再外挂标签，改用 tooltip 查看占比，避免视觉噪声。
+              // A10 修复：原阈值 8% 时，左上角仍会聚集 4~5 个极小切片（1%/2%），
+              // 引线密集交叉且与 20% 标签贴近。提高阈值到 12%，并缩短引线长度，
+              // 小占比改由右侧图例（已含「类目 + 条数」）与 tooltip 承载。
               label: {
                 show: true,
                 formatter: function (p) {
-                  return p.percent >= 8 ? Math.round(p.percent) + "%" : "";
+                  return p.percent >= 12 ? Math.round(p.percent) + "%" : "";
                 },
                 fontSize: 10.5, color: "#6B7280", lineHeight: 14
               },
               minAngle: 4,
-              labelLine: { show: true, length: 10, length2: 6, lineStyle: { color: "#C3CCDB" } },
+              labelLine: { show: true, length: 6, length2: 4, lineStyle: { color: "#C3CCDB" } },
               emphasis: { scale: true, scaleSize: 7 },
               data: D.by_type.map(function (t, i) {
                 return {
@@ -351,16 +357,22 @@ methods: {
         var el4 = document.getElementById("ov-source");
         if (el4 && D.by_source && D.by_source.length) {
           var srcs = D.by_source.slice().sort(function (a, b) { return b.count - a.count; }).slice(0, 9);
+          // A10：轴标签用 short（简称），tooltip 用 source（官方全称），兼顾可读与口径完整。
+          // 同时显式限定 axisLabel 宽度，杜绝 ECharts 默认的「无提示截断」导致名称失真。
+          var axLabels = srcs.map(function (x) { return x.short || x.source; }).reverse();
+          var fullNames = srcs.map(function (x) { return x.source; }).reverse();
           EChartsLib.make(el4, {
             animationDuration: 1000,
-            grid: { left: 8, right: 44, top: 10, bottom: 8, containLabel: true },
+            // right 由 44 加大到 58，避免最长的 643 标签压到 x 轴末端网格
+            grid: { left: 8, right: 58, top: 10, bottom: 8, containLabel: true },
             tooltip: {
               trigger: "axis", backgroundColor: NAV, borderWidth: 0,
               textStyle: { color: "#fff", fontSize: 12 },
               axisPointer: { type: "shadow", shadowStyle: { color: "rgba(63,114,175,.08)" } },
               formatter: function (ps) {
                 var p = ps[0];
-                return p.name + "：<b>" + p.value + "</b> 条";
+                var full = fullNames[p.dataIndex] || p.name;
+                return full + "：<b>" + p.value + "</b> 条";
               }
             },
             xAxis: {
@@ -369,9 +381,12 @@ methods: {
               splitLine: { lineStyle: { color: "rgba(24,39,63,.06)" } }
             },
             yAxis: {
-              type: "category", data: srcs.map(function (x) { return x.source; }).reverse(),
+              type: "category", data: axLabels,
               axisTick: { show: false }, axisLine: { show: false },
-              axisLabel: { color: "#4B5563", fontSize: 11.5 }
+              axisLabel: {
+                color: "#4B5563", fontSize: 11.5,
+                width: 96, overflow: "truncate"
+              }
             },
             series: [{
               name: "政策", type: "bar", barMaxWidth: 16,
@@ -727,16 +742,22 @@ methods: {
         var el4 = document.getElementById("ov-source");
         if (el4 && D.by_source && D.by_source.length) {
           var srcs = D.by_source.slice().sort(function (a, b) { return b.count - a.count; }).slice(0, 9);
+          // A10：轴标签用 short（简称），tooltip 用 source（官方全称），兼顾可读与口径完整。
+          // 同时显式限定 axisLabel 宽度，杜绝 ECharts 默认的「无提示截断」导致名称失真。
+          var axLabels = srcs.map(function (x) { return x.short || x.source; }).reverse();
+          var fullNames = srcs.map(function (x) { return x.source; }).reverse();
           EChartsLib.make(el4, {
             animationDuration: 1000,
-            grid: { left: 8, right: 44, top: 10, bottom: 8, containLabel: true },
+            // right 由 44 加大到 58，避免最长的 643 标签压到 x 轴末端网格
+            grid: { left: 8, right: 58, top: 10, bottom: 8, containLabel: true },
             tooltip: {
               trigger: "axis", backgroundColor: NAV, borderWidth: 0,
               textStyle: { color: "#fff", fontSize: 12 },
               axisPointer: { type: "shadow", shadowStyle: { color: "rgba(63,114,175,.08)" } },
               formatter: function (ps) {
                 var p = ps[0];
-                return p.name + "：<b>" + p.value + "</b> 条";
+                var full = fullNames[p.dataIndex] || p.name;
+                return full + "：<b>" + p.value + "</b> 条";
               }
             },
             xAxis: {
@@ -745,9 +766,12 @@ methods: {
               splitLine: { lineStyle: { color: "rgba(24,39,63,.06)" } }
             },
             yAxis: {
-              type: "category", data: srcs.map(function (x) { return x.source; }).reverse(),
+              type: "category", data: axLabels,
               axisTick: { show: false }, axisLine: { show: false },
-              axisLabel: { color: "#4B5563", fontSize: 11.5 }
+              axisLabel: {
+                color: "#4B5563", fontSize: 11.5,
+                width: 96, overflow: "truncate"
+              }
             },
             series: [{
               name: "政策", type: "bar", barMaxWidth: 16,
@@ -1189,16 +1213,19 @@ methods: {
       return {
         D: D,
         sources: (function () {
+          // A10 修复：alias 的 value 必须与数据层 by_level[].sources[].name 完全一致。
+          // 数据层已统一为官方全称（build_db.py SOURCE_LABEL），此处同步为全称，
+          // 否则 rc[alias[...]] 会查不到、rows 全部回落为 0（静默失效）。
           var alias = {
             "农业农村部": "农业农村部",
-            "广东省农业农村厅": "省农业农村厅",
-            "遂溪县人民政府门户": "遂溪县政府",
-            "阳西县人民政府门户": "阳西县政府",
-            "徐闻县人民政府门户": "徐闻县政府",
-            "广东省人民政府门户网站": "省政府门户",
-            "阳春市人民政府门户": "阳春市政府",
-            "广东省政务服务和数据管理局": "省政数局",
-            "高州市人民政府门户": "高州市政府"
+            "广东省农业农村厅": "广东省农业农村厅",
+            "遂溪县人民政府门户": "遂溪县人民政府门户",
+            "阳西县人民政府门户": "阳西县人民政府门户",
+            "徐闻县人民政府门户": "徐闻县人民政府门户",
+            "广东省人民政府门户网站": "广东省人民政府门户网站",
+            "阳春市人民政府门户": "阳春市人民政府门户",
+            "广东省政务服务和数据管理局": "广东省政务服务和数据管理局",
+            "高州市人民政府门户": "高州市人民政府门户"
           };
           var rc = {};
           (D.by_level || []).forEach(function (l) {
